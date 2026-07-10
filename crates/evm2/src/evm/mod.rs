@@ -1556,6 +1556,7 @@ impl<'a, T: EvmTypes> Host<T> for Evm<'a, T> {
         };
         Ok(AccountLoad {
             balance: info.balance,
+            nonce: info.nonce,
             code_hash: if exists { info.code_hash } else { B256::ZERO },
             code,
             exists,
@@ -1724,6 +1725,8 @@ impl<'a, T: EvmTypes> Host<T> for Evm<'a, T> {
 pub struct AccountLoad {
     /// Account balance.
     pub balance: Word,
+    /// Account nonce.
+    pub nonce: u64,
     /// Account code hash.
     pub code_hash: B256,
     /// Account bytecode.
