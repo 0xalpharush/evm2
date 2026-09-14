@@ -1,8 +1,8 @@
 //! Parity tests
 
 use crate::utils::{
-    AccountInfo, CacheDB, Context, DatabaseCommit, EmptyDB, ExecutionResult, Output, SpecId,
-    TransactTo, TxEnv, deploy_contract, inspect_deploy_contract, print_traces,
+    AccountInfo, Bytecode, CacheDB, Context, DatabaseCommit, EmptyDB, ExecutionResult, Output,
+    SpecId, TransactTo, TxEnv, deploy_contract, inspect_deploy_contract, print_traces,
 };
 use alloy_primitives::{Address, U256, address, hex, map::HashSet};
 use alloy_rpc_types_eth::TransactionInfo;
@@ -12,6 +12,41 @@ use alloy_rpc_types_trace::parity::{
 use evm2_inspectors::tracing::{
     TracingInspector, TracingInspectorConfig, parity::populate_state_diff,
 };
+
+#[test]
+fn test_parity_vm_trace_omits_root_precompile_marker_code() {
+    let precompile = address!("0000000000000000000000000000000000000004");
+    let marker = Bytecode::new_raw(hex!("ef").into());
+    let trace_types = HashSet::from_iter([TraceType::VmTrace]);
+    let mut evm = Context::mainnet()
+        .with_db(CacheDB::<EmptyDB>::default())
+        .modify_db_chained(|db| {
+            db.insert_account_info(&precompile, AccountInfo::default().with_code(marker));
+        })
+        .build_mainnet_with_inspector(TracingInspector::new(
+            TracingInspectorConfig::from_parity_config(&trace_types),
+        ));
+
+    let res = evm
+        .inspect_tx(TxEnv {
+            gas_limit: 100_000,
+            kind: TransactTo::Call(precompile),
+            data: hex!("deadbeef").into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(res.result.is_success());
+    assert!(evm.inspector().traces().nodes()[0].is_precompile());
+
+    let inspector = core::mem::take(&mut evm.inspector);
+    let trace = inspector
+        .into_parity_builder()
+        .into_trace_results_with_state(&res.tx_result, &trace_types, evm.ctx.db_mut())
+        .unwrap();
+    let vm_trace = trace.vm_trace.unwrap();
+    assert!(vm_trace.code.is_empty());
+    assert!(vm_trace.ops.is_empty());
+}
 
 #[test]
 fn test_parity_selfdestruct_london() {

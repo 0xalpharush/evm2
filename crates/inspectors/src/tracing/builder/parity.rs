@@ -177,7 +177,7 @@ impl ParityTraceBuilder {
 
         let breadth_first_addresses = if trace_types.contains(&TraceType::VmTrace) {
             CallTraceNodeWalkerBF::new(&self.nodes)
-                .map(|node| node.trace.address)
+                .map(|node| (!node.is_precompile()).then_some(node.trace.address))
                 .collect::<Vec<_>>()
         } else {
             vec![]
@@ -462,7 +462,7 @@ pub(crate) fn populate_vm_trace_bytecodes<I>(
     breadth_first_addresses: I,
 ) -> DbResult<()>
 where
-    I: IntoIterator<Item = Address>,
+    I: IntoIterator<Item = Option<Address>>,
 {
     let mut stack: VecDeque<&mut VmTrace> = VecDeque::new();
     stack.push_back(trace);
@@ -476,7 +476,9 @@ where
             }
         }
 
-        let addr = addrs.next().expect("there should be an address");
+        let Some(addr) = addrs.next().expect("there should be an address") else {
+            continue;
+        };
 
         let db_acc = db.get_account(&addr)?.unwrap_or_default();
 
