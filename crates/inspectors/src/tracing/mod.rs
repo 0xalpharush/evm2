@@ -272,27 +272,12 @@ impl TracingInspector {
         GethTraceBuilder::new_borrowed(&self.traces.arena).with_features(self.features)
     }
 
-    /// Returns true if we're no longer in the context of the root call.
-    const fn is_deep(&self) -> bool {
-        // the root call will always be the first entry in the trace stack
-        !self.trace_stack.is_empty()
-    }
-
     /// Returns true if this a call to a precompile contract.
     ///
-    /// Returns true if the `to` address is a precompile contract and the value is zero.
+    /// Returns true if the `to` address is a precompile contract.
     #[inline]
-    fn is_precompile_call<T: EvmTypes>(
-        &self,
-        host: &Evm<'_, T>,
-        to: &Address,
-        value: &U256,
-    ) -> bool {
-        if host.precompiles().contains(to) {
-            // only if this is _not_ the root call
-            return self.is_deep() && value.is_zero();
-        }
-        false
+    fn is_precompile_call<T: EvmTypes>(&self, host: &Evm<'_, T>, to: &Address) -> bool {
+        host.precompiles().contains(to)
     }
 
     /// Returns the currently active call trace.
@@ -352,7 +337,7 @@ impl TracingInspector {
     ) {
         // This will only be true if the inspector is configured to exclude precompiles and the call
         // is to a precompile
-        let push_kind = if maybe_precompile.unwrap_or(false) {
+        let push_kind = if depth != 0 && maybe_precompile.unwrap_or(false) && value.is_zero() {
             // We don't want to track precompiles
             PushTraceKind::PushOnly
         } else {
@@ -659,10 +644,12 @@ impl<T: EvmTypes> Inspector<T> for TracingInspector {
             message.value
         };
 
-        // if calls to precompiles should be excluded, check whether this is a call to a precompile
-        let maybe_precompile = self.config.exclude_precompile_calls.then(|| {
-            !message.disable_precompiles && self.is_precompile_call(interp.host(), &to, &value)
-        });
+        // Track precompile execution separately from deciding whether a nested, zero-value call is
+        // omitted from the trace. VM traces must not treat precompile marker code as EVM bytecode.
+        let maybe_precompile = self
+            .config
+            .exclude_precompile_calls
+            .then(|| !message.disable_precompiles && self.is_precompile_call(interp.host(), &to));
 
         self.start_trace_on_call(
             usize::from(message.depth),
