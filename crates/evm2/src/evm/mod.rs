@@ -823,6 +823,34 @@ impl<'a, T: EvmTypes> Evm<'a, T> {
         self.inspector.as_deref_mut()
     }
 
+    /// Notifies the active inspector that a custom transaction handler is entering a synthetic
+    /// transaction scope around one or more top-level EVM messages.
+    #[inline]
+    pub fn inspector_transaction_scope_start(&mut self) {
+        self.assert_inspector_mutable();
+        if let Some(inspector) = self.inspector.as_deref_mut() {
+            inspector.transaction_scope_start();
+        }
+    }
+
+    /// Completes the active synthetic transaction scope.
+    #[inline]
+    pub fn inspector_transaction_scope_end(&mut self, result: &MessageResult<T>) {
+        self.assert_inspector_mutable();
+        if let Some(inspector) = self.inspector.as_deref_mut() {
+            inspector.transaction_scope_end(result);
+        }
+    }
+
+    /// Aborts the active synthetic transaction scope.
+    #[inline]
+    pub fn inspector_transaction_scope_abort(&mut self) {
+        self.assert_inspector_mutable();
+        if let Some(inspector) = self.inspector.as_deref_mut() {
+            inspector.transaction_scope_abort();
+        }
+    }
+
     #[inline]
     fn inspect_log(&mut self, log: &Log) {
         let guard = self.enter_execution();

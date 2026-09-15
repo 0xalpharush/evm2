@@ -12,6 +12,24 @@ use auto_impl::auto_impl;
 /// EVM execution inspector.
 #[auto_impl(&mut, Box)]
 pub trait Inspector<T: EvmTypesHost>: NonStaticAny {
+    /// Starts a synthetic transaction scope around one or more top-level messages.
+    ///
+    /// Custom transaction handlers can use this for transactions, such as account-abstraction
+    /// batches, whose user-visible transaction frame contains multiple EVM messages. Ordinary
+    /// Ethereum transaction handlers do not need to call this hook.
+    #[inline]
+    fn transaction_scope_start(&mut self) {}
+
+    /// Completes a synthetic transaction scope.
+    #[inline]
+    fn transaction_scope_end(&mut self, result: &MessageResult<T>) {
+        let _ = result;
+    }
+
+    /// Aborts a synthetic transaction scope when the custom handler returns an error.
+    #[inline]
+    fn transaction_scope_abort(&mut self) {}
+
     /// Called after a frame interpreter has been initialized.
     #[inline]
     fn initialize_interp(&mut self, interp: &mut Interpreter<'_, '_, T>) {
