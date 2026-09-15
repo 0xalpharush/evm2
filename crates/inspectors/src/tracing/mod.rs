@@ -86,6 +86,8 @@ pub struct TracingInspector {
     traces: CallTraceArena,
     /// Tracks active calls
     trace_stack: Vec<usize>,
+    /// Extra call depth introduced by a synthetic custom-transaction root.
+    transaction_scope_depth: usize,
     /// Number of logs recorded so far, used as the index of the next log.
     log_count: usize,
     /// Tracks recorded steps waiting for `step_end`.
@@ -126,6 +128,7 @@ impl TracingInspector {
         let Self {
             traces,
             trace_stack,
+            transaction_scope_depth,
             log_count,
             step_stack,
             recorded_steps,
@@ -150,6 +153,7 @@ impl TracingInspector {
 
         traces.clear();
         trace_stack.clear();
+        *transaction_scope_depth = 0;
         *log_count = 0;
         step_stack.clear();
         *recorded_steps = 0;
@@ -272,12 +276,27 @@ impl TracingInspector {
         GethTraceBuilder::new_borrowed(&self.traces.arena).with_features(self.features)
     }
 
+    /// Returns true if we're no longer in the context of the root call.
+    const fn is_deep(&self) -> bool {
+        // the root call will always be the first entry in the trace stack
+        !self.trace_stack.is_empty()
+    }
+
     /// Returns true if this a call to a precompile contract.
     ///
-    /// Returns true if the `to` address is a precompile contract.
+    /// Returns true if the `to` address is a precompile contract and the value is zero.
     #[inline]
-    fn is_precompile_call<T: EvmTypes>(&self, host: &Evm<'_, T>, to: &Address) -> bool {
-        host.precompiles().contains(to)
+    fn is_precompile_call<T: EvmTypes>(
+        &self,
+        host: &Evm<'_, T>,
+        to: &Address,
+        value: &U256,
+    ) -> bool {
+        if host.precompiles().contains(to) {
+            // only if this is _not_ the root call
+            return self.is_deep() && value.is_zero();
+        }
+        false
     }
 
     /// Returns the currently active call trace.
@@ -337,7 +356,7 @@ impl TracingInspector {
     ) {
         // This will only be true if the inspector is configured to exclude precompiles and the call
         // is to a precompile
-        let push_kind = if depth != 0 && maybe_precompile.unwrap_or(false) && value.is_zero() {
+        let push_kind = if maybe_precompile.unwrap_or(false) {
             // We don't want to track precompiles
             PushTraceKind::PushOnly
         } else {
@@ -586,6 +605,36 @@ impl TracingInspector {
 }
 
 impl<T: EvmTypes> Inspector<T> for TracingInspector {
+    fn transaction_scope_start(&mut self) {
+        assert_eq!(self.transaction_scope_depth, 0, "nested transaction scopes are unsupported");
+        self.start_trace_on_call(
+            0,
+            Address::ZERO,
+            Bytes::new(),
+            U256::ZERO,
+            CallKind::Call,
+            Address::ZERO,
+            0,
+            Some(false),
+        );
+        self.transaction_scope_depth = 1;
+    }
+
+    fn transaction_scope_end(&mut self, result: &MessageResult<T>) {
+        assert_eq!(self.transaction_scope_depth, 1, "transaction scope is not active");
+        self.transaction_scope_depth = 0;
+        let trace_idx = self.pop_trace_idx();
+        let trace = &mut self.traces.arena[trace_idx].trace;
+        trace.status = Some(result.stop);
+        trace.success = result.stop.is_success();
+    }
+
+    fn transaction_scope_abort(&mut self) {
+        if self.transaction_scope_depth != 0 {
+            self.fuse();
+        }
+    }
+
     #[inline]
     fn initialize_interp(&mut self, interp: &mut Interpreter<'_, '_, T>) {
         if self.spec_id.is_none() {
@@ -648,15 +697,13 @@ impl<T: EvmTypes> Inspector<T> for TracingInspector {
             message.value
         };
 
-        // Track precompile execution separately from deciding whether a nested, zero-value call is
-        // omitted from the trace. VM traces must not treat precompile marker code as EVM bytecode.
-        let maybe_precompile = self
-            .config
-            .exclude_precompile_calls
-            .then(|| !message.disable_precompiles && self.is_precompile_call(interp.host(), &to));
+        // if calls to precompiles should be excluded, check whether this is a call to a precompile
+        let maybe_precompile = self.config.exclude_precompile_calls.then(|| {
+            !message.disable_precompiles && self.is_precompile_call(interp.host(), &to, &value)
+        });
 
         self.start_trace_on_call(
-            usize::from(message.depth),
+            usize::from(message.depth) + self.transaction_scope_depth,
             to,
             message.input.clone(),
             value,
@@ -689,7 +736,7 @@ impl<T: EvmTypes> Inspector<T> for TracingInspector {
         self.features = interp.version().features;
 
         self.start_trace_on_call(
-            usize::from(message.depth),
+            usize::from(message.depth) + self.transaction_scope_depth,
             message.destination,
             message.input.clone(),
             message.value,
