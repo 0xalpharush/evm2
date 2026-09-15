@@ -69,8 +69,10 @@ pub(crate) struct Replay {
     /// Requires the interpreter backend; incompatible with `--jit`/`--aot`.
     #[arg(long)]
     pub(crate) json_traces: bool,
-    /// Print each executed test's outcome (pass/fail, state root, gas) as JSON.
-    #[arg(long)]
+    /// Output outcome in revm-compatible JSON format.
+    ///
+    /// `--json-output` remains available as an alias for compatibility.
+    #[arg(short = 'o', long = "json-outcome", alias = "json-output")]
     pub(crate) json_output: bool,
     /// Dump the post-execution state (accounts and storage) to stdout.
     #[arg(long)]
@@ -103,11 +105,8 @@ fn parse_block_range(value: &str) -> Result<RangeInclusive<u64>, String> {
 #[cfg(test)]
 mod tests {
     use super::parse_block_range;
-    #[cfg(feature = "jit")]
     use super::{Args, Command};
-    #[cfg(feature = "jit")]
     use clap::Parser;
-    #[cfg(feature = "jit")]
     use std::path::PathBuf;
 
     #[test]
@@ -120,6 +119,16 @@ mod tests {
     #[test]
     fn parse_block_range_rejects_reversed_range() {
         assert!(parse_block_range("12-10").unwrap_err().contains("greater"));
+    }
+
+    #[test]
+    fn replay_accepts_revm_json_outcome_flag_and_legacy_alias() {
+        for flag in ["--json-outcome", "-o", "--json-output"] {
+            let args = Args::try_parse_from(["evm2", "replay", flag, "fixture.json"]).unwrap();
+            let Command::Replay(replay) = args.command else { panic!("expected replay command") };
+            assert!(replay.json_output);
+            assert_eq!(replay.path, PathBuf::from("fixture.json"));
+        }
     }
 
     #[cfg(feature = "jit")]
